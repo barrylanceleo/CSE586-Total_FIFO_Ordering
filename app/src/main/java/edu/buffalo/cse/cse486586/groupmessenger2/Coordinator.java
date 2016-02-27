@@ -16,18 +16,21 @@ import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.StringWriter;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class Coordinator implements MessageReceivedEventListener{
+public class Coordinator implements MessageReceivedEventListener, TimerExpiredEventListener{
 
     static final String TAG = Coordinator.class.getSimpleName();
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
     static final int LISTENER_PORT = 10000;
+    static final long TIMEOUT = 10000;
     int MY_PORT;
     private Activity parentActivity;
     private TextView displayView;
@@ -35,15 +38,16 @@ public class Coordinator implements MessageReceivedEventListener{
     private static Coordinator instance = null;
     private Sender mSender;
     private Receiver mReceiver;
+    private TimerManager mTimerManager;
     private Integer lastReceivedMessageId = -1;
     private Integer lastSentMessageId = -1;
     private Integer lastProposedSeqNum = -1;
     private Integer lastAgreedSeqNum = -1;
     private Integer finalContinuousSeqNum = 0;
 
-    private HashMap<Integer, List<Message>> proposalsList = new HashMap<Integer, List<Message>>();
+    private HashMap<Integer, List<Message>> broadcastedMessageList = new HashMap<Integer, List<Message>>();
     private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
-    List<Integer> currentDestinationPorts;
+    private List<Integer> currentDestinationPorts;
 
     public Sender getSender() {
         return mSender;
@@ -73,13 +77,16 @@ public class Coordinator implements MessageReceivedEventListener{
         displayView.setMovementMethod(new ScrollingMovementMethod());
 
         // initialize a sender that can be used to send messages later
-        mSender = new Sender();
+        mSender = new Sender(parentActivity);
         this.currentDestinationPorts = new LinkedList<Integer>();
         for(int port : DESTINATION_PORTS)
             this.currentDestinationPorts.add(port);
 
         //create a receiver to keep listening to incoming messages
-        mReceiver = new Receiver(LISTENER_PORT, this);
+        mReceiver = new Receiver(parentActivity, LISTENER_PORT, this);
+
+        // create a timer manager
+        mTimerManager = new TimerManager(parentActivity, this);
     }
 
     static Coordinator getInstance(Activity parentActivity)
@@ -143,13 +150,13 @@ public class Coordinator implements MessageReceivedEventListener{
             case 1:
 
                 // new proposal received, add to proposal list for that message
-                List<Message> messageProposals = proposalsList.get(receivedMessage.getSenderMessageId());
+                List<Message> messageProposals = broadcastedMessageList.get(receivedMessage.getSenderMessageId());
                 if(messageProposals == null)
                 {
                     messageProposals = new LinkedList<Message>();
                 }
                 messageProposals.add(receivedMessage);
-                proposalsList.put(receivedMessage.getSenderMessageId(), messageProposals);
+                broadcastedMessageList.put(receivedMessage.getSenderMessageId(), messageProposals);
 
                 // Log the message
                 Log.v(TAG, "Proposal Received: " + receivedMessage.toString() +
@@ -157,39 +164,7 @@ public class Coordinator implements MessageReceivedEventListener{
 
                 // check if we have received proposal from all nodes
                 // if yes, send the agreed sequence number
-                if(messageProposals.size() == currentDestinationPorts.size())
-                {
-                    int agreedSeqNum = -1;
-                    int proposerOfAgreedSeq = -1;
-                    Iterator<Message> proposalItr = messageProposals.iterator();
-                    while(proposalItr.hasNext())
-                    {
-
-                        //Choose the last proposal with the highest seqNum
-                        Message proposal = proposalItr.next();
-                        if(proposal.getGlobalSeqNum() >= agreedSeqNum)
-                        {
-                            agreedSeqNum = proposal.getGlobalSeqNum();
-                            proposerOfAgreedSeq = proposal.getProposerPid();
-                        }
-                    }
-
-                    // send agreements to the proposers with the agreed sequence number
-                    proposalItr = messageProposals.iterator();
-                    while(proposalItr.hasNext())
-                    {
-                        Message agreement = proposalItr.next();
-                        Integer destinationpid = agreement.getProposerPid();
-                        agreement.setType(2);
-                        agreement.setGlobalSeqNum(agreedSeqNum);
-                        agreement.setProposerPid(proposerOfAgreedSeq);
-                        sendMessage(agreement, destinationpid);
-                        Log.v(TAG, "Agreement sent: " + agreement.toString());
-
-                    }
-
-                }
-
+                sendAgreementIfAppropriate(messageProposals, receivedMessage.getSenderMessageId());
                 break;
 
             case 2:
@@ -213,7 +188,10 @@ public class Coordinator implements MessageReceivedEventListener{
                 // deliver the messages that are on the top of the queue
                 while((messageQueue.peek() != null) && messageQueue.peek().isDeliverable())
                 {
+                    //remove the message from the priority queue
                     Message topMessage = messageQueue.poll();
+
+                    //display the message
                     displayView.append(finalContinuousSeqNum + ". "
                             + topMessage.getMessageText() + "\n");
 
@@ -244,6 +222,44 @@ public class Coordinator implements MessageReceivedEventListener{
 
     }
 
+
+    void sendAgreementIfAppropriate(List<Message> messageProposals, int senderMessageId)
+    {
+        if(messageProposals.size() == currentDestinationPorts.size())
+        {
+            int agreedSeqNum = -1;
+            int proposerOfAgreedSeq = -1;
+            Iterator<Message> proposalItr = messageProposals.iterator();
+            while(proposalItr.hasNext())
+            {
+
+                //Choose the last proposal with the highest seqNum
+                Message proposal = proposalItr.next();
+                if(proposal.getGlobalSeqNum() >= agreedSeqNum)
+                {
+                    agreedSeqNum = proposal.getGlobalSeqNum();
+                    proposerOfAgreedSeq = proposal.getProposerPid();
+                }
+            }
+
+            // send agreements to the proposers with the agreed sequence number
+            proposalItr = messageProposals.iterator();
+            while(proposalItr.hasNext())
+            {
+                Message agreement = proposalItr.next();
+                Integer destinationpid = agreement.getProposerPid();
+                agreement.setType(2);
+                agreement.setGlobalSeqNum(agreedSeqNum);
+                agreement.setProposerPid(proposerOfAgreedSeq);
+                sendMessage(agreement, destinationpid);
+                Log.v(TAG, "Agreement sent: " + agreement.toString());
+
+            }
+
+            //remove the message from the hashmap
+            broadcastedMessageList.remove(senderMessageId);
+        }
+    }
 
     Message buildMessageFromReceivedJson(String message) throws JSONException
     {
@@ -337,8 +353,15 @@ public class Coordinator implements MessageReceivedEventListener{
     {
         // build message object
         Message mMessage = buildMessageObject(messageText);
+
+        broadcastedMessageList.put(mMessage.getSenderMessageId(), new LinkedList<Message>());
         mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
         Log.v(TAG, "Message broad-casted: " + mMessage.toString());
+
+        // start a timer after broadcasting a message
+        mTimerManager.startTimer(TIMEOUT, mMessage.getSenderMessageId());
+        Log.v(TAG, "Timer for Message Id " + mMessage.getSenderMessageId() +
+        " Start Time: " + new Date());
 
     }
 
@@ -373,4 +396,79 @@ public class Coordinator implements MessageReceivedEventListener{
         return mMessage;
     }
 
+    @Override
+    public void onTimerExpired(int senderMessageId) {
+
+        Log.v(TAG, "Timer for Message Id " + senderMessageId +
+                " End Time: " + new Date());
+
+        List<Message> proposals = broadcastedMessageList.get(senderMessageId);
+
+        if(proposals != null && proposals.size() != currentDestinationPorts.size())
+        {
+
+            Log.v(TAG, "Proposals missing even after the timer expired." +
+                    "\nSenderMessageId: " +senderMessageId +
+                    "\nProposal Count: " +proposals.size() +
+                    "\nDestination Count: " +currentDestinationPorts.size());
+
+            //find the missing proposer
+
+            // create a set of processes that have proposed
+            HashSet<Integer> currentProposers = new HashSet<Integer>();
+            for(Message proposal : proposals)
+            {
+                currentProposers.add(proposal.getProposerPid());
+            }
+
+            //find the missing proposers and put them in a list
+            List<Integer> missingProposers = new LinkedList<Integer>();
+            for(Integer proposers : currentDestinationPorts)
+            {
+                if(!currentProposers.contains(proposers))
+                {
+                    missingProposers.add(proposers);
+                }
+            }
+
+            // for each missing proposer clear their state
+            for(Integer missingProposer : missingProposers)
+            {
+                Log.v(TAG, "Missing Proposer: " + missingProposer);
+
+                // clear the proposal of this proposer from my list
+                Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
+                        broadcastedMessageList.entrySet().iterator();
+                while(broadcastListItr.hasNext())
+                {
+                    HashMap.Entry<Integer, List<Message>> pair = broadcastListItr.next();
+                    List<Message> myProposals = pair.getValue();
+                    for(Message proposal : myProposals)
+                    {
+                        if(proposal.getProposerPid() == missingProposer)
+                        {
+                            if(myProposals.remove(proposal))
+                            {
+                                Log.v(TAG, "Remove proposal: \n" +proposal.toString()
+                                        + "\nfrom missing proposer " + missingProposer);
+                            }
+                        }
+                    }
+                }
+
+                // declare the missing proposer as failed and
+                // remove the proposers from the list
+                if(!currentDestinationPorts.remove(missingProposer))
+                    Log.v(TAG, "Unable to remove Missing Proposer: " + missingProposer);
+
+            }
+
+            // TODO: clear the deleted process' messages from the priority queue
+
+            //Send agreement if necessary
+            sendAgreementIfAppropriate(proposals, senderMessageId);
+
+        }
+
+    }
 }

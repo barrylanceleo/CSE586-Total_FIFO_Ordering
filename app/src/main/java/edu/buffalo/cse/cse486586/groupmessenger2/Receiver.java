@@ -1,5 +1,6 @@
 package edu.buffalo.cse.cse486586.groupmessenger2;
 
+import android.app.Activity;
 import android.os.AsyncTask;
 import android.util.Log;
 
@@ -15,11 +16,13 @@ public class Receiver {
 
     static final String TAG = Receiver.class.getSimpleName();
     ServerSocket listenerSocket;
+    Activity parentActivity;
     int listenerPort;
 
-    Receiver(int listenerPort, MessageReceivedEventListener messageReceivedListener)
+    Receiver(Activity parentActivity, int listenerPort, MessageReceivedEventListener messageReceivedListener)
     {
         this.listenerPort = listenerPort;
+        this.parentActivity = parentActivity;
 
         // make the coordinator listen to message received events
         setOnMessageReceivedListener(messageReceivedListener);
@@ -45,12 +48,11 @@ public class Receiver {
         @Override
         protected Void doInBackground(ServerSocket... params) {
             ServerSocket serverSocket = params[0];
-            try
-            {
-                //noinspection InfiniteLoopStatement
-                while(true)
-                {
+            //noinspection InfiniteLoopStatement
+            while(true) {
+                try {
                     Socket server = serverSocket.accept();
+                    server.setSoTimeout(parentActivity.getResources().getInteger(R.integer.timeout));
                     Log.v(TAG, "Connection Accepted!");
                     DataInputStream in = new DataInputStream(server.getInputStream());
                     String mesRecvd = in.readUTF().trim();
@@ -58,16 +60,12 @@ public class Receiver {
                     publishProgress(mesRecvd);
                     server.close();
                     Log.v(TAG, "Socket  closed");
+                } catch (SocketTimeoutException s) {
+                    Log.e(TAG, "Receiver timed out!");
+                } catch (IOException e) {
+                    Log.e(TAG, Log.getStackTraceString(e));
                 }
             }
-            catch(SocketTimeoutException s)
-            {
-                Log.e(TAG, "Socket timed out!", s);
-            }catch(IOException e)
-            {
-                Log.e(TAG, Log.getStackTraceString(e));
-            }
-            return null;
         }
 
         protected void onProgressUpdate(String...strings) {

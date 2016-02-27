@@ -1,18 +1,28 @@
 package edu.buffalo.cse.cse486586.groupmessenger2;
 
+import android.app.Activity;
 import android.os.AsyncTask;
 import android.util.Log;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.util.List;
 
 public class Sender {
 
     static final String TAG = SenderTask.class.getSimpleName();
+    Activity parentActivity;
+
+    Sender(Activity parentActivity)
+    {
+        this.parentActivity = parentActivity;
+    }
+
 
     public void broadcastMessage(String message, List<Integer> destinationPorts)
     {
@@ -41,13 +51,20 @@ public class Sender {
             try
             {
                 //Log.v(TAG, "Sending message to " + destinationPort + " : " + msgToSend);
-                Socket socket = new Socket(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
-                        destinationPort);
+                Socket socket = new Socket();
+                socket.setSoTimeout(parentActivity.getResources().getInteger(R.integer.timeout));
+                socket.connect(new InetSocketAddress(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
+                        destinationPort), parentActivity.getResources().getInteger(R.integer.timeout));
+
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 out.writeUTF(msgToSend);
                 //Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
                 socket.close();
-            } catch (UnknownHostException e) {
+            } catch(SocketTimeoutException e)
+            {
+                Log.e(TAG, "SenderTask timed out");
+            }
+            catch (UnknownHostException e) {
                 Log.e(TAG, "SenderTask UnknownHostException");
             } catch (IOException e) {
                 Log.e(TAG, "SenderTask socket IOException");
