@@ -1,0 +1,376 @@
+package edu.buffalo.cse.cse486586.groupmessenger2;
+
+import android.app.Activity;
+import android.content.ContentResolver;
+import android.content.ContentValues;
+import android.content.Context;
+import android.database.Cursor;
+import android.telephony.TelephonyManager;
+import android.text.method.ScrollingMovementMethod;
+import android.util.JsonWriter;
+import android.util.Log;
+import android.widget.TextView;
+
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.IOException;
+import java.io.StringWriter;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.PriorityQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class Coordinator implements MessageReceivedEventListener{
+
+    static final String TAG = Coordinator.class.getSimpleName();
+    static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
+    static final int LISTENER_PORT = 10000;
+    int MY_PORT;
+    private Activity parentActivity;
+    private TextView displayView;
+
+    private static Coordinator instance = null;
+    private Sender mSender;
+    private Receiver mReceiver;
+    private Integer lastReceivedMessageId = -1;
+    private Integer lastSentMessageId = -1;
+    private Integer lastProposedSeqNum = -1;
+    private Integer lastAgreedSeqNum = -1;
+    private Integer finalContinuousSeqNum = 0;
+
+    private HashMap<Integer, List<Message>> proposalsList = new HashMap<Integer, List<Message>>();
+    private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
+    List<Integer> currentDestinationPorts;
+
+    public Sender getSender() {
+        return mSender;
+    }
+
+    public Receiver getReceiver() {
+        return mReceiver;
+    }
+
+    private AtomicInteger seqNum;
+
+
+
+    private Coordinator(Activity parentActivity)
+    {
+        this.parentActivity = parentActivity;
+        // initialize a HashMap to contain the received messages
+        seqNum = new AtomicInteger(-1);
+
+        // initialize my sending port
+        TelephonyManager tel = (TelephonyManager) parentActivity.getSystemService(Context.TELEPHONY_SERVICE);
+        String portStr = tel.getLine1Number().substring(tel.getLine1Number().length() - 4);
+        MY_PORT = (Integer.parseInt(portStr) * 2);
+
+        // set up the display view
+        displayView = (TextView) parentActivity.findViewById(R.id.textView1);
+        displayView.setMovementMethod(new ScrollingMovementMethod());
+
+        // initialize a sender that can be used to send messages later
+        mSender = new Sender();
+        this.currentDestinationPorts = new LinkedList<Integer>();
+        for(int port : DESTINATION_PORTS)
+            this.currentDestinationPorts.add(port);
+
+        //create a receiver to keep listening to incoming messages
+        mReceiver = new Receiver(LISTENER_PORT, this);
+    }
+
+    static Coordinator getInstance(Activity parentActivity)
+    {
+        if(instance == null)
+        {
+            instance = new Coordinator(parentActivity);
+        }
+        return instance;
+    }
+
+    @Override
+    public void onMessageReceived(String message) {
+
+        Message receivedMessage;
+        try
+        {
+            receivedMessage = buildMessageFromReceivedJson(message);
+
+        }
+        catch(JSONException e)
+        {
+            Log.e(TAG, "Improper Message received. Ignoring...");
+            return;
+        }
+
+        // handle the message based on the message type
+        switch(receivedMessage.getType())
+        {
+            case 0:
+                // Log the message
+                Log.v(TAG, "New Message Received: " +receivedMessage.toString());
+
+                // propose a global sequence number
+                int newProposedSeqNum  = Math.max(lastProposedSeqNum, lastAgreedSeqNum) +1;
+                receivedMessage.setGlobalSeqNum(newProposedSeqNum);
+
+                if(newProposedSeqNum <= lastProposedSeqNum)
+                    Log.e(TAG, "ProposedSeqNum did not increase!!! lastProposedSeqNum: "
+                            + lastProposedSeqNum + "newProposedSeqNum: " +newProposedSeqNum);
+
+                lastProposedSeqNum = newProposedSeqNum;
+
+
+                // get the sender's id from the new message, so that we can propose to it
+                Integer senderPid = receivedMessage.getProposerPid();
+
+                // add process id, here the port number would server as the process id
+                // as the port number is unique
+                receivedMessage.setProposerPid(MY_PORT);
+
+                // add Message to the priority queue
+                messageQueue.add(receivedMessage);
+
+                // send proposal message with proposed sequence number
+                receivedMessage.setType(1);
+                sendMessage(receivedMessage, senderPid);
+                Log.v(TAG, "Proposal sent: " + receivedMessage.toString());
+
+                break;
+            case 1:
+
+                // new proposal received, add to proposal list for that message
+                List<Message> messageProposals = proposalsList.get(receivedMessage.getSenderMessageId());
+                if(messageProposals == null)
+                {
+                    messageProposals = new LinkedList<Message>();
+                }
+                messageProposals.add(receivedMessage);
+                proposalsList.put(receivedMessage.getSenderMessageId(), messageProposals);
+
+                // Log the message
+                Log.v(TAG, "Proposal Received: " + receivedMessage.toString() +
+                        "\nNumber of proposals for this message: " + messageProposals.size());
+
+                // check if we have received proposal from all nodes
+                // if yes, send the agreed sequence number
+                if(messageProposals.size() == currentDestinationPorts.size())
+                {
+                    int agreedSeqNum = -1;
+                    int proposerOfAgreedSeq = -1;
+                    Iterator<Message> proposalItr = messageProposals.iterator();
+                    while(proposalItr.hasNext())
+                    {
+
+                        //Choose the last proposal with the highest seqNum
+                        Message proposal = proposalItr.next();
+                        if(proposal.getGlobalSeqNum() >= agreedSeqNum)
+                        {
+                            agreedSeqNum = proposal.getGlobalSeqNum();
+                            proposerOfAgreedSeq = proposal.getProposerPid();
+                        }
+                    }
+
+                    // send agreements to the proposers with the agreed sequence number
+                    proposalItr = messageProposals.iterator();
+                    while(proposalItr.hasNext())
+                    {
+                        Message agreement = proposalItr.next();
+                        Integer destinationpid = agreement.getProposerPid();
+                        agreement.setType(2);
+                        agreement.setGlobalSeqNum(agreedSeqNum);
+                        agreement.setProposerPid(proposerOfAgreedSeq);
+                        sendMessage(agreement, destinationpid);
+                        Log.v(TAG, "Agreement sent: " + agreement.toString());
+
+                    }
+
+                }
+
+                break;
+
+            case 2:
+                // Log the message
+                Log.v(TAG, "Agreement Received: " + receivedMessage.toString());
+
+                // new agreement received
+                receivedMessage.setIsDeliverable(true);
+                if(!messageQueue.remove(receivedMessage))
+                    Log.e(TAG, "Unable to find message in priority queue, this message would be duplicated." + receivedMessage.toString());
+
+                messageQueue.add(receivedMessage);
+
+                // print queue
+                StringBuilder sb = new StringBuilder();
+                sb.append("Message Queue:\n");
+                for(Message m : messageQueue)
+                    sb.append(m.toString() + "\n");
+                Log.v(TAG, sb.toString());
+
+                // deliver the messages that are on the top of the queue
+                while((messageQueue.peek() != null) && messageQueue.peek().isDeliverable())
+                {
+                    Message topMessage = messageQueue.poll();
+                    displayView.append(finalContinuousSeqNum + ". "
+                            + topMessage.getMessageText() + "\n");
+
+                    //store the message in the content provider
+                    ContentResolver mContentResolver = parentActivity.getContentResolver();
+                    ContentValues cv = new ContentValues();
+                    cv.put("key", Integer.toString(finalContinuousSeqNum));
+                    cv.put("value", topMessage.getMessageText());
+                    mContentResolver.insert(GroupMessengerProvider.CPUri, cv);
+                    Log.v(TAG, "Delivered and stored message in Content Provider: " + topMessage.toString());
+                    Cursor testCursor = mContentResolver.query(GroupMessengerProvider.CPUri, null, String.valueOf(finalContinuousSeqNum), null, null);
+                    if(testCursor != null)
+                    {
+                        testCursor.moveToFirst();
+                        String returnKey = testCursor.getString(testCursor.getColumnIndex("key"));
+                        String returnValue = testCursor.getString(testCursor.getColumnIndex("value"));
+                        Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " +returnValue);
+                    }
+                    ++finalContinuousSeqNum;
+                }
+
+                break;
+
+            default:
+                Log.e(TAG, "Improper Message Type. Ignoring...");
+                return;
+        }
+
+    }
+
+
+    Message buildMessageFromReceivedJson(String message) throws JSONException
+    {
+        JSONObject messageJSON;
+        Message mMessage = new Message();
+        try
+        {
+            messageJSON = new JSONObject(message);
+
+            mMessage.setType(messageJSON.getInt("type"));
+            if(mMessage.getType() < 0 || mMessage.getType() > 2)
+                throw new NumberFormatException();
+
+            // assign a receiver messageId if it a new message
+            if(mMessage.getType() == 0)
+            {
+                mMessage.setReceiverMessageId(++lastReceivedMessageId);
+            }
+            else
+            {
+                mMessage.setReceiverMessageId(messageJSON.getInt("receiverMessageId"));
+            }
+
+            mMessage.setSenderMessageId(messageJSON.getInt("senderMessageId"));
+            mMessage.setGlobalSeqNum(messageJSON.getInt("globalSeqNum"));
+            mMessage.setProposerPid(messageJSON.getInt("proposerPid"));
+            mMessage.setMessageText(messageJSON.getString("messageText"));
+
+//            // check if message is deliverable
+//            if(mMessage.getType() == 2)
+//                mMessage.setIsDeliverable(true);
+//            else
+//                mMessage.setIsDeliverable(false);
+        }
+        catch(JSONException e)
+        {
+            Log.e(TAG, "Improper Message Format.");
+            throw e;
+        }
+        catch(NumberFormatException e)
+        {
+            Log.e(TAG, "Improper Message Type.");
+            throw new JSONException("Improper message type");
+        }
+
+        return mMessage;
+
+    }
+
+
+    String buildJSONMessage(Message message)
+    {
+        StringWriter sWriter = new StringWriter();
+        JsonWriter jWriter = new JsonWriter(sWriter);
+        String jsonMessage = "";
+        try
+        {
+            jWriter.beginObject();
+
+            // message type
+            jWriter.name("type").value(message.getType());
+
+            // if message is new there would be no receiverMessageId and globalSequence number
+            jWriter.name("receiverMessageId").value(message.getReceiverMessageId());
+
+            jWriter.name("senderMessageId").value(message.getSenderMessageId());
+
+            jWriter.name("globalSeqNum").value(message.getGlobalSeqNum());
+
+            jWriter.name("proposerPid").value(message.getProposerPid());
+
+            // add the messageText
+            jWriter.name("messageText").value(message.getMessageText());
+
+            jWriter.endObject();
+
+            jsonMessage = sWriter.toString();
+        }
+        catch (IOException e)
+        {
+            Log.e(TAG, "IO Exception in JsonWriter.");
+            Log.e(TAG, e.toString());
+        }
+
+        return jsonMessage;
+    }
+
+
+    // this would be invoke when the send button it tapped
+    public void broadcastMessage(String messageText )
+    {
+        // build message object
+        Message mMessage = buildMessageObject(messageText);
+        mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
+        Log.v(TAG, "Message broad-casted: " + mMessage.toString());
+
+    }
+
+    public void broadcastMessage(Message mMessage)
+    {
+        mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
+    }
+
+    public void sendMessage(Message mMessage, Integer destinationPort)
+    {
+        mSender.sendMessage(buildJSONMessage(mMessage), destinationPort);
+    }
+
+    // this is would be used for new messages only
+    Message buildMessageObject(String messageText)
+    {
+        Message mMessage = new Message();
+        mMessage.setMessageText(messageText);
+        mMessage.setType(0);
+        mMessage.setSenderMessageId(++lastSentMessageId);
+
+        // no globalSeqNum for new messages
+        // no receiverMessageId for new messages
+        mMessage.setReceiverMessageId(-1);
+        mMessage.setGlobalSeqNum(-1);
+
+        // for new message proposerPid would be sender pId
+        // so that the receiver knows whom to send the proposal to
+        mMessage.setProposerPid(MY_PORT);
+
+        // isDeliverable will be handled by the receiver
+        return mMessage;
+    }
+
+}
