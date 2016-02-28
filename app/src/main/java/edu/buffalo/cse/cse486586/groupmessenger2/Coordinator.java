@@ -49,14 +49,6 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
     private List<Integer> currentDestinationPorts;
 
-    public Sender getSender() {
-        return mSender;
-    }
-
-    public Receiver getReceiver() {
-        return mReceiver;
-    }
-
     private Coordinator(Activity parentActivity) {
         this.parentActivity = parentActivity;
 
