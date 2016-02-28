@@ -23,9 +23,9 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.PriorityQueue;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class Coordinator implements MessageReceivedEventListener, TimerExpiredEventListener{
+public class Coordinator implements MessageReceivedEventListener, TimerExpiredEventListener {
 
     static final String TAG = Coordinator.class.getSimpleName();
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
@@ -45,7 +45,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     private Integer lastAgreedSeqNum = -1;
     private Integer finalContinuousSeqNum = 0;
 
-    private HashMap<Integer, List<Message>> broadcastedMessageList = new HashMap<Integer, List<Message>>();
+    private ConcurrentHashMap<Integer, List<Message>> broadcastedMessageList = new ConcurrentHashMap<Integer, List<Message>>();
     private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
     private List<Integer> currentDestinationPorts;
 
@@ -57,15 +57,8 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         return mReceiver;
     }
 
-    private AtomicInteger seqNum;
-
-
-
-    private Coordinator(Activity parentActivity)
-    {
+    private Coordinator(Activity parentActivity) {
         this.parentActivity = parentActivity;
-        // initialize a HashMap to contain the received messages
-        seqNum = new AtomicInteger(-1);
 
         // initialize my sending port
         TelephonyManager tel = (TelephonyManager) parentActivity.getSystemService(Context.TELEPHONY_SERVICE);
@@ -79,7 +72,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         // initialize a sender that can be used to send messages later
         mSender = new Sender(parentActivity);
         this.currentDestinationPorts = new LinkedList<Integer>();
-        for(int port : DESTINATION_PORTS)
+        for (int port : DESTINATION_PORTS)
             this.currentDestinationPorts.add(port);
 
         //create a receiver to keep listening to incoming messages
@@ -89,50 +82,48 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         mTimerManager = new TimerManager(parentActivity, this);
     }
 
-    static Coordinator getInstance(Activity parentActivity)
-    {
-        if(instance == null)
-        {
+    synchronized static Coordinator getInstance(Activity parentActivity) {
+        if (instance == null) {
             instance = new Coordinator(parentActivity);
         }
         return instance;
     }
 
     @Override
-    public void onMessageReceived(String message) {
+    synchronized public void onMessageReceived(String message) {
 
         Message receivedMessage;
-        try
-        {
+        try {
             receivedMessage = buildMessageFromReceivedJson(message);
 
-        }
-        catch(JSONException e)
-        {
+        } catch (JSONException e) {
             Log.e(TAG, "Improper Message received. Ignoring...");
             return;
         }
 
+
+        // print queue
+        StringBuilder sb = new StringBuilder();
+        sb.append("Message Queue on receiving message:\n");
+        for (Message m : messageQueue)
+            sb.append(m.toString() + "\n");
+        Log.v(TAG, sb.toString());
+
         // handle the message based on the message type
-        switch(receivedMessage.getType())
-        {
+        switch (receivedMessage.getType()) {
             case 0:
                 // Log the message
-                Log.v(TAG, "New Message Received: " +receivedMessage.toString());
+                Log.v(TAG, "New Message Received: " + receivedMessage.toString());
 
                 // propose a global sequence number
-                int newProposedSeqNum  = Math.max(lastProposedSeqNum, lastAgreedSeqNum) +1;
+                int newProposedSeqNum = Math.max(lastProposedSeqNum, lastAgreedSeqNum) + 1;
                 receivedMessage.setGlobalSeqNum(newProposedSeqNum);
 
-                if(newProposedSeqNum <= lastProposedSeqNum)
+                if (newProposedSeqNum <= lastProposedSeqNum)
                     Log.e(TAG, "ProposedSeqNum did not increase!!! lastProposedSeqNum: "
-                            + lastProposedSeqNum + "newProposedSeqNum: " +newProposedSeqNum);
+                            + lastProposedSeqNum + "newProposedSeqNum: " + newProposedSeqNum);
 
                 lastProposedSeqNum = newProposedSeqNum;
-
-
-                // get the sender's id from the new message, so that we can propose to it
-                Integer senderPid = receivedMessage.getProposerPid();
 
                 // add process id, here the port number would server as the process id
                 // as the port number is unique
@@ -143,7 +134,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
                 // send proposal message with proposed sequence number
                 receivedMessage.setType(1);
-                sendMessage(receivedMessage, senderPid);
+                sendMessage(receivedMessage, receivedMessage.getSenderPid());
                 Log.v(TAG, "Proposal sent: " + receivedMessage.toString());
 
                 break;
@@ -151,8 +142,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
                 // new proposal received, add to proposal list for that message
                 List<Message> messageProposals = broadcastedMessageList.get(receivedMessage.getSenderMessageId());
-                if(messageProposals == null)
-                {
+                if (messageProposals == null) {
                     messageProposals = new LinkedList<Message>();
                 }
                 messageProposals.add(receivedMessage);
@@ -173,45 +163,13 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
                 // new agreement received
                 receivedMessage.setIsDeliverable(true);
-                if(!messageQueue.remove(receivedMessage))
+                if (!messageQueue.remove(receivedMessage))
                     Log.e(TAG, "Unable to find message in priority queue, this message would be duplicated." + receivedMessage.toString());
 
                 messageQueue.add(receivedMessage);
 
-                // print queue
-                StringBuilder sb = new StringBuilder();
-                sb.append("Message Queue:\n");
-                for(Message m : messageQueue)
-                    sb.append(m.toString() + "\n");
-                Log.v(TAG, sb.toString());
-
-                // deliver the messages that are on the top of the queue
-                while((messageQueue.peek() != null) && messageQueue.peek().isDeliverable())
-                {
-                    //remove the message from the priority queue
-                    Message topMessage = messageQueue.poll();
-
-                    //display the message
-                    displayView.append(finalContinuousSeqNum + ". "
-                            + topMessage.getMessageText() + "\n");
-
-                    //store the message in the content provider
-                    ContentResolver mContentResolver = parentActivity.getContentResolver();
-                    ContentValues cv = new ContentValues();
-                    cv.put("key", Integer.toString(finalContinuousSeqNum));
-                    cv.put("value", topMessage.getMessageText());
-                    mContentResolver.insert(GroupMessengerProvider.CPUri, cv);
-                    Log.v(TAG, "Delivered and stored message in Content Provider: " + topMessage.toString());
-                    Cursor testCursor = mContentResolver.query(GroupMessengerProvider.CPUri, null, String.valueOf(finalContinuousSeqNum), null, null);
-                    if(testCursor != null)
-                    {
-                        testCursor.moveToFirst();
-                        String returnKey = testCursor.getString(testCursor.getColumnIndex("key"));
-                        String returnValue = testCursor.getString(testCursor.getColumnIndex("value"));
-                        Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " +returnValue);
-                    }
-                    ++finalContinuousSeqNum;
-                }
+                // deliver the messages on top of the queue which are deliverable
+                deliverMessagesifAppropriate();
 
                 break;
 
@@ -222,69 +180,102 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
     }
 
+    synchronized void deliverMessagesifAppropriate() {
 
-    void sendAgreementIfAppropriate(List<Message> messageProposals, int senderMessageId)
-    {
-        if(messageProposals.size() == currentDestinationPorts.size())
-        {
-            int agreedSeqNum = -1;
-            int proposerOfAgreedSeq = -1;
-            Iterator<Message> proposalItr = messageProposals.iterator();
-            while(proposalItr.hasNext())
-            {
+        // deliver the messages that are on the top of the queue
+        while ((messageQueue.peek() != null) && messageQueue.peek().isDeliverable()) {
+            //remove the message from the priority queue
+            Message topMessage = messageQueue.poll();
 
-                //Choose the last proposal with the highest seqNum
-                Message proposal = proposalItr.next();
-                if(proposal.getGlobalSeqNum() >= agreedSeqNum)
-                {
-                    agreedSeqNum = proposal.getGlobalSeqNum();
-                    proposerOfAgreedSeq = proposal.getProposerPid();
+            final String messageText = topMessage.getMessageText();
+            final int finalSequenceNum = finalContinuousSeqNum;
+            parentActivity.runOnUiThread(new Runnable() {
+                public void run() {
+                    //display the message
+                    displayView.append(finalSequenceNum + ". "
+                            + messageText + "\n");
                 }
+            });
+
+            //store the message in the content provider
+            ContentResolver mContentResolver = parentActivity.getContentResolver();
+            ContentValues cv = new ContentValues();
+            cv.put("key", Integer.toString(finalContinuousSeqNum));
+            cv.put("value", topMessage.getMessageText());
+            mContentResolver.insert(GroupMessengerProvider.CPUri, cv);
+            Log.v(TAG, "Delivered and stored message in Content Provider: " + topMessage.toString());
+            Cursor testCursor = mContentResolver.query(GroupMessengerProvider.CPUri, null, String.valueOf(finalContinuousSeqNum), null, null);
+            if (testCursor != null) {
+                testCursor.moveToFirst();
+                String returnKey = testCursor.getString(testCursor.getColumnIndex("key"));
+                String returnValue = testCursor.getString(testCursor.getColumnIndex("value"));
+                Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " + returnValue);
             }
+            ++finalContinuousSeqNum;
+        }
 
-            // send agreements to the proposers with the agreed sequence number
-            proposalItr = messageProposals.iterator();
-            while(proposalItr.hasNext())
-            {
-                Message agreement = proposalItr.next();
-                Integer destinationpid = agreement.getProposerPid();
-                agreement.setType(2);
-                agreement.setGlobalSeqNum(agreedSeqNum);
-                agreement.setProposerPid(proposerOfAgreedSeq);
-                sendMessage(agreement, destinationpid);
-                Log.v(TAG, "Agreement sent: " + agreement.toString());
+        // print queue
+        StringBuilder sb = new StringBuilder();
+        sb.append("Message Queue after delivering messages:\n");
+        for (Message m : messageQueue)
+            sb.append(m.toString() + "\n");
+        Log.v(TAG, sb.toString());
 
-            }
+    }
 
-            //remove the message from the hashmap
-            broadcastedMessageList.remove(senderMessageId);
+
+    synchronized void sendAgreementIfAppropriate(List<Message> messageProposals, int senderMessageId) {
+                if (messageProposals.size() == currentDestinationPorts.size()) {
+                    int agreedSeqNum = -1;
+                    int proposerOfAgreedSeq = -1;
+                    Iterator<Message> proposalItr = messageProposals.iterator();
+                    while (proposalItr.hasNext()) {
+
+                        //Choose the last proposal with the highest seqNum
+                        Message proposal = proposalItr.next();
+                        if (proposal.getGlobalSeqNum() >= agreedSeqNum) {
+                            agreedSeqNum = proposal.getGlobalSeqNum();
+                            proposerOfAgreedSeq = proposal.getProposerPid();
+                        }
+                    }
+
+                    // send agreements to the proposers with the agreed sequence number
+                    proposalItr = messageProposals.iterator();
+                    while (proposalItr.hasNext()) {
+                        Message agreement = proposalItr.next();
+                        Integer destinationpid = agreement.getProposerPid();
+                        agreement.setType(2);
+                        agreement.setGlobalSeqNum(agreedSeqNum);
+                        agreement.setProposerPid(proposerOfAgreedSeq);
+                        sendMessage(agreement, destinationpid);
+                        Log.v(TAG, "Agreement sent: " + agreement.toString());
+                    }
+
+                    //remove the message from the hashmap
+                    broadcastedMessageList.remove(senderMessageId);
         }
     }
 
-    Message buildMessageFromReceivedJson(String message) throws JSONException
-    {
+    synchronized Message buildMessageFromReceivedJson(String message) throws JSONException {
         JSONObject messageJSON;
         Message mMessage = new Message();
-        try
-        {
+        try {
             messageJSON = new JSONObject(message);
 
             mMessage.setType(messageJSON.getInt("type"));
-            if(mMessage.getType() < 0 || mMessage.getType() > 2)
+            if (mMessage.getType() < 0 || mMessage.getType() > 2)
                 throw new NumberFormatException();
 
             // assign a receiver messageId if it a new message
-            if(mMessage.getType() == 0)
-            {
+            if (mMessage.getType() == 0) {
                 mMessage.setReceiverMessageId(++lastReceivedMessageId);
-            }
-            else
-            {
+            } else {
                 mMessage.setReceiverMessageId(messageJSON.getInt("receiverMessageId"));
             }
 
             mMessage.setSenderMessageId(messageJSON.getInt("senderMessageId"));
             mMessage.setGlobalSeqNum(messageJSON.getInt("globalSeqNum"));
+            mMessage.setSenderPid(messageJSON.getInt("senderPid"));
             mMessage.setProposerPid(messageJSON.getInt("proposerPid"));
             mMessage.setMessageText(messageJSON.getString("messageText"));
 
@@ -293,14 +284,10 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 //                mMessage.setIsDeliverable(true);
 //            else
 //                mMessage.setIsDeliverable(false);
-        }
-        catch(JSONException e)
-        {
+        } catch (JSONException e) {
             Log.e(TAG, "Improper Message Format.");
             throw e;
-        }
-        catch(NumberFormatException e)
-        {
+        } catch (NumberFormatException e) {
             Log.e(TAG, "Improper Message Type.");
             throw new JSONException("Improper message type");
         }
@@ -310,13 +297,11 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     }
 
 
-    String buildJSONMessage(Message message)
-    {
+    synchronized String buildJSONMessage(Message message) {
         StringWriter sWriter = new StringWriter();
         JsonWriter jWriter = new JsonWriter(sWriter);
         String jsonMessage = "";
-        try
-        {
+        try {
             jWriter.beginObject();
 
             // message type
@@ -329,6 +314,8 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
             jWriter.name("globalSeqNum").value(message.getGlobalSeqNum());
 
+            jWriter.name("senderPid").value(message.getSenderPid());
+
             jWriter.name("proposerPid").value(message.getProposerPid());
 
             // add the messageText
@@ -337,9 +324,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
             jWriter.endObject();
 
             jsonMessage = sWriter.toString();
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             Log.e(TAG, "IO Exception in JsonWriter.");
             Log.e(TAG, e.toString());
         }
@@ -349,8 +334,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
 
     // this would be invoke when the send button it tapped
-    public void broadcastMessage(String messageText )
-    {
+    synchronized public void broadcastMessage(String messageText) {
         // build message object
         Message mMessage = buildMessageObject(messageText);
 
@@ -361,23 +345,20 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         // start a timer after broadcasting a message
         mTimerManager.startTimer(TIMEOUT, mMessage.getSenderMessageId());
         Log.v(TAG, "Timer for Message Id " + mMessage.getSenderMessageId() +
-        " Start Time: " + new Date());
+                " Start Time: " + new Date());
 
     }
 
-    public void broadcastMessage(Message mMessage)
-    {
+    synchronized public void broadcastMessage(Message mMessage) {
         mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
     }
 
-    public void sendMessage(Message mMessage, Integer destinationPort)
-    {
+    synchronized public void sendMessage(Message mMessage, Integer destinationPort) {
         mSender.sendMessage(buildJSONMessage(mMessage), destinationPort);
     }
 
     // this is would be used for new messages only
-    Message buildMessageObject(String messageText)
-    {
+    synchronized Message buildMessageObject(String messageText) {
         Message mMessage = new Message();
         mMessage.setMessageText(messageText);
         mMessage.setType(0);
@@ -388,87 +369,106 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         mMessage.setReceiverMessageId(-1);
         mMessage.setGlobalSeqNum(-1);
 
-        // for new message proposerPid would be sender pId
-        // so that the receiver knows whom to send the proposal to
-        mMessage.setProposerPid(MY_PORT);
+        mMessage.setProposerPid(-1);
 
+        mMessage.setSenderPid(MY_PORT);
         // isDeliverable will be handled by the receiver
         return mMessage;
     }
 
     @Override
-    public void onTimerExpired(int senderMessageId) {
+    synchronized public void onTimerExpired(final int senderMessageId) {
 
         Log.v(TAG, "Timer for Message Id " + senderMessageId +
                 " End Time: " + new Date());
 
         List<Message> proposals = broadcastedMessageList.get(senderMessageId);
 
-        if(proposals != null && proposals.size() != currentDestinationPorts.size())
-        {
+        if (proposals != null && proposals.size() != currentDestinationPorts.size()) {
 
             Log.v(TAG, "Proposals missing even after the timer expired." +
-                    "\nSenderMessageId: " +senderMessageId +
-                    "\nProposal Count: " +proposals.size() +
-                    "\nDestination Count: " +currentDestinationPorts.size());
+                    "\nSenderMessageId: " + senderMessageId +
+                    "\nProposal Count: " + proposals.size() +
+                    "\nDestination Count: " + currentDestinationPorts.size());
 
             //find the missing proposer
 
             // create a set of processes that have proposed
             HashSet<Integer> currentProposers = new HashSet<Integer>();
-            for(Message proposal : proposals)
-            {
+            for (Message proposal : proposals) {
                 currentProposers.add(proposal.getProposerPid());
             }
 
-            //find the missing proposers and put them in a list
+            // find the missing proposers and put them in a list
             List<Integer> missingProposers = new LinkedList<Integer>();
-            for(Integer proposers : currentDestinationPorts)
-            {
-                if(!currentProposers.contains(proposers))
-                {
+            for (Integer proposers : currentDestinationPorts) {
+                if (!currentProposers.contains(proposers)) {
                     missingProposers.add(proposers);
                 }
             }
 
             // for each missing proposer clear their state
-            for(Integer missingProposer : missingProposers)
-            {
+            for (Integer missingProposer : missingProposers) {
                 Log.v(TAG, "Missing Proposer: " + missingProposer);
 
-                // clear the proposal of this proposer from my list
-                Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
-                        broadcastedMessageList.entrySet().iterator();
-                while(broadcastListItr.hasNext())
-                {
-                    HashMap.Entry<Integer, List<Message>> pair = broadcastListItr.next();
-                    List<Message> myProposals = pair.getValue();
-                    for(Message proposal : myProposals)
-                    {
-                        if(proposal.getProposerPid() == missingProposer)
-                        {
-                            if(myProposals.remove(proposal))
-                            {
-                                Log.v(TAG, "Remove proposal: \n" +proposal.toString()
-                                        + "\nfrom missing proposer " + missingProposer);
-                            }
+                // declare the missing proposer as failed and
+                // remove the proposers from the list
+                if (currentDestinationPorts.remove(missingProposer)) {
+                    Log.v(TAG, "Removed missing proposer from the destinations: " + missingProposer
+                            + "\nCurrent proposers size: " + currentDestinationPorts.size());
+                } else {
+                    Log.v(TAG, "Unable to remove Missing Proposer: " + missingProposer);
+                }
+
+                // clear the deleted process' messages from the priority queue
+                Iterator<Message> queueItr = messageQueue.iterator();
+                while (queueItr.hasNext()) {
+                    Message messageInQueue = queueItr.next();
+                    if (messageInQueue.getSenderPid() == missingProposer) {
+                        if (messageQueue.remove(messageInQueue)) {
+                            Log.v(TAG, "Cleared message from queue due to missing proposer: "
+                                    + missingProposer + "\n" + messageInQueue.toString());
                         }
                     }
                 }
 
-                // declare the missing proposer as failed and
-                // remove the proposers from the list
-                if(!currentDestinationPorts.remove(missingProposer))
-                    Log.v(TAG, "Unable to remove Missing Proposer: " + missingProposer);
+
+
+                // clear the proposal of this proposer from my list
+                Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
+                        broadcastedMessageList.entrySet().iterator();
+                while (broadcastListItr.hasNext()) {
+                    HashMap.Entry<Integer, List<Message>> pair = broadcastListItr.next();
+                    List<Message> myProposals = pair.getValue();
+
+                    for(Iterator<Message> iter = myProposals.iterator(); iter.hasNext();)
+                    {
+                        Message proposal = iter.next();
+                        if (proposal.getProposerPid() == missingProposer) {
+                            iter.remove();
+                            Log.v(TAG, "Removed proposal: \n" + proposal.toString()
+                                    + "\nfrom missing proposer " + missingProposer);
+                        }
+                    }
+
+                    // Send agreement if necessary
+                    if(!myProposals.isEmpty()){
+                        Message firstProposal = myProposals.get(0);
+                        sendAgreementIfAppropriate(myProposals, firstProposal.getSenderMessageId());
+                    }
+                }
+
 
             }
+//
+//            //Send agreement if necessary
+//            sendAgreementIfAppropriate(proposals, senderMessageId);
 
-            // TODO: clear the deleted process' messages from the priority queue
-
-            //Send agreement if necessary
-            sendAgreementIfAppropriate(proposals, senderMessageId);
+            // deliver the messages on top of the queue which are deliverable
+            deliverMessagesifAppropriate();
 
         }
-
     }
 }
+
+

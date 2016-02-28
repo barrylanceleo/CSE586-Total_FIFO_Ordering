@@ -117,7 +117,6 @@ public class GroupMessengerProvider extends ContentProvider {
     @Override
     public Cursor query(Uri uri, String[] projection, String selection, String[] selectionArgs,
                         String sortOrder) {
-        Log.v("query", selection);
         if(CPUri.toString().equals(uri.toString()))
         {
 
@@ -128,7 +127,7 @@ public class GroupMessengerProvider extends ContentProvider {
             // given query format is not right, need to re-format
             selectionArgs = new String[]{selection};
             selection = "key=?";
-            Log.v("query", selection + " " + selectionArgs[0]);
+            //Log.v("query", selection + " " + selectionArgs[0]);
 
             Cursor c = qb.query(
                     db,            // The database to query
@@ -140,12 +139,19 @@ public class GroupMessengerProvider extends ContentProvider {
                     sortOrder        // The sort order
             );
 
-            Log.v("query", "Got cursor with " + c.getCount() + "row(s)");
+            Log.v("TAG", "Query Output:");
             c.moveToFirst();
-            if (c.getCount() != 0) {
-                Log.v("query", "retrieved rowId " + c.getLong(c.getColumnIndex("_id")));
-
+            // log the rows returned
+            while(!c.isAfterLast())
+            {
+                String returnKey = c.getString(c.getColumnIndex("key"));
+                String returnValue = c.getString(c.getColumnIndex("value"));
+                Log.v(TAG, "KEY: " + returnKey + " VALUE: " +returnValue);
+                c.moveToNext();
             }
+
+            c.moveToFirst();
+
             // Tells the Cursor what URI to watch, so it knows when its source data changes
             c.setNotificationUri(getContext().getContentResolver(), uri);
             return c;

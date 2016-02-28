@@ -8,6 +8,7 @@ public class Message implements Comparable<Message>{
     private int senderMessageId;        // original sender id
     private int globalSeqNum;           // proposed or agreed Sequence Number
     private int proposerPid;
+    private int senderPid;
     private boolean isDeliverable;
 
     public int getReceiverMessageId() {
@@ -16,6 +17,14 @@ public class Message implements Comparable<Message>{
 
     public void setReceiverMessageId(int receiverMessageId) {
         this.receiverMessageId = receiverMessageId;
+    }
+
+    public int getSenderPid() {
+        return senderPid;
+    }
+
+    public void setSenderPid(int senderPid) {
+        this.senderPid = senderPid;
     }
 
     public int getSenderMessageId() {
@@ -161,8 +170,9 @@ public class Message implements Comparable<Message>{
                 "Global Sequence Number: " + this.globalSeqNum + "\n" +
                 "Message Id at at source: " + this.senderMessageId + "\n" +
                 "Message Id at receiver: " + this.receiverMessageId + "\n" +
-                "Proposer Id: " + this.proposerPid + "\n" + "Is Deliverable? " +
-                this.isDeliverable;
+                "Sender Id: " + this.senderPid + "\n" +
+                "Proposer Id: " + this.proposerPid + "\n" +
+                "Is Deliverable? " + this.isDeliverable;
     }
 
 }
