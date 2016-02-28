@@ -29,7 +29,7 @@ public class Sender {
         for(Integer port : destinationPorts) {
 
             // create a sender task to send the message
-            new SenderTask().executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR, message, port);
+            new SenderTask().executeOnExecutor(AsyncTask.SERIAL_EXECUTOR, message, port);
         }
     }
 

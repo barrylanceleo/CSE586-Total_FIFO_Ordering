@@ -228,14 +228,19 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                 if (messageProposals.size() == currentDestinationPorts.size()) {
                     int agreedSeqNum = -1;
                     int proposerOfAgreedSeq = -1;
+
                     Iterator<Message> proposalItr = messageProposals.iterator();
                     while (proposalItr.hasNext()) {
-
-                        //Choose the last proposal with the highest seqNum
+                        //Choose the proposal with the highest seqNum then with the highest proposerPid
                         Message proposal = proposalItr.next();
-                        if (proposal.getGlobalSeqNum() >= agreedSeqNum) {
+                        if (proposal.getGlobalSeqNum() > agreedSeqNum) {
                             agreedSeqNum = proposal.getGlobalSeqNum();
                             proposerOfAgreedSeq = proposal.getProposerPid();
+                        }
+                        else if(proposal.getGlobalSeqNum() == agreedSeqNum)
+                        {
+                            if(proposal.getProposerPid() > proposerOfAgreedSeq)
+                                proposerOfAgreedSeq = proposal.getProposerPid();
                         }
                     }
 
