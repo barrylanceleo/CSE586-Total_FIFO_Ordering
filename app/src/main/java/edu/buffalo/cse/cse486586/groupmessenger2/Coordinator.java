@@ -30,7 +30,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     static final String TAG = Coordinator.class.getSimpleName();
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
     static final int LISTENER_PORT = 10000;
-    static final long TIMEOUT = 10000;
+    static final long TIMEOUT = 5000;
     int MY_PORT;
     private Activity parentActivity;
     private TextView displayView;
@@ -401,6 +401,17 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
             for (Integer proposers : currentDestinationPorts) {
                 if (!currentProposers.contains(proposers)) {
                     missingProposers.add(proposers);
+
+                    // display in the UI
+                    final int missingProposer = proposers;
+                    parentActivity.runOnUiThread(new Runnable() {
+                        public void run() {
+                            //display the message
+                            displayView.append("Looks like pid: "
+                                    + missingProposer + "has been terminated\n");
+                        }
+                    });
+
                 }
             }
 
