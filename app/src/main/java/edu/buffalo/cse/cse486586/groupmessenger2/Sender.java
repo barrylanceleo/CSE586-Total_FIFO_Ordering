@@ -5,22 +5,22 @@ import android.os.AsyncTask;
 import android.util.Log;
 
 import java.io.DataOutputStream;
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
-import java.net.UnknownHostException;
 import java.util.List;
 
 public class Sender {
 
     static final String TAG = SenderTask.class.getSimpleName();
+    private static final int SOCKET_TIMEOUT = 5000;
     Activity parentActivity;
+    FailureListener failureListener;
 
-    Sender(Activity parentActivity)
+    Sender(Activity parentActivity, FailureListener failureListener)
     {
         this.parentActivity = parentActivity;
+        this.failureListener = failureListener;
     }
 
 
@@ -52,23 +52,30 @@ public class Sender {
             {
                 //Log.v(TAG, "Sending message to " + destinationPort + " : " + msgToSend);
                 Socket socket = new Socket();
-                socket.setSoTimeout(parentActivity.getResources().getInteger(R.integer.timeout));
+                socket.setSoTimeout(SOCKET_TIMEOUT);
                 socket.connect(new InetSocketAddress(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
-                        destinationPort), parentActivity.getResources().getInteger(R.integer.timeout));
-
+                        destinationPort), SOCKET_TIMEOUT);
+                if(!socket.isConnected())
+                {
+                    Log.v(TAG, "Couldn't connect. Failure");
+                }
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 out.writeUTF(msgToSend);
-                //Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
+//                BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+//                bw.write(msgToSend);
+//                bw.newLine();
+                Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
                 socket.close();
-            } catch(SocketTimeoutException e)
+            } catch(Exception e)
             {
-                Log.e(TAG, "SenderTask timed out");
+                Log.e(TAG, "SenderTask Exception");
+                failureListener.onFailure(destinationPort);
             }
-            catch (UnknownHostException e) {
-                Log.e(TAG, "SenderTask UnknownHostException");
-            } catch (IOException e) {
-                Log.e(TAG, "SenderTask socket IOException");
-            }
+//            catch (UnknownHostException e) {
+//                Log.e(TAG, "SenderTask UnknownHostException");
+//            } catch (IOException e) {
+//                Log.e(TAG, "SenderTask socket IOException");
+//            }
             return null;
         }
     }

@@ -48,7 +48,7 @@ public class GroupMessengerActivity extends Activity {
                 inputEditText.setText("");
 
                 // broadcast message to all nodes
-                mCoordinator.broadcastMessage(inputText);
+                mCoordinator.broadcastMessage(Message.TYPE.DATA, inputText);
             }
         });
 

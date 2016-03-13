@@ -2,8 +2,29 @@ package edu.buffalo.cse.cse486586.groupmessenger2;
 
 public class Message implements Comparable<Message>{
 
+    public enum TYPE
+    {
+        PING(0),
+        DATA(1),
+        PROPOSAL(2),
+        AGREEMENT(3);
+
+        private final int typeId;
+
+        TYPE(int  typeId)
+        {
+            this.typeId = typeId;
+        }
+
+        int getVal()
+        {
+            return typeId;
+        }
+
+    }
+
     private  String messageText;
-    private int  type;
+    private TYPE type;
     private int receiverMessageId;
     private int senderMessageId;        // original sender id
     private int globalSeqNum;           // proposed or agreed Sequence Number
@@ -59,12 +80,24 @@ public class Message implements Comparable<Message>{
         this.globalSeqNum = globalSeqNum;
     }
 
-    public int getType() {
+    public TYPE getType() {
         return type;
     }
 
-    public void setType(int type) {
+    public void setType(TYPE type) {
         this.type = type;
+    }
+
+    public int getTypeId() {
+        return type.typeId;
+    }
+
+    public void setTypeId(int typeId) {
+        for (TYPE type : TYPE.values()) {
+            if (type.typeId == typeId) {
+                this.type = type;
+            }
+        }
     }
 
     public String getMessageText() {

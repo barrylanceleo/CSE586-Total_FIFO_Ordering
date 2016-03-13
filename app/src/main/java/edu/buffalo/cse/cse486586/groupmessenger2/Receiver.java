@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.os.AsyncTask;
 import android.util.Log;
 
+import java.io.BufferedReader;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
@@ -48,18 +49,27 @@ public class Receiver {
         @Override
         protected Void doInBackground(ServerSocket... params) {
             ServerSocket serverSocket = params[0];
+            BufferedReader br;
             //noinspection InfiniteLoopStatement
             while(true) {
                 try {
                     Socket server = serverSocket.accept();
                     server.setSoTimeout(parentActivity.getResources().getInteger(R.integer.timeout));
                     Log.v(TAG, "Connection Accepted!");
+//                    br = new BufferedReader(new InputStreamReader(server.getInputStream()));
+//                    String mesRecvd = br.readLine();
                     DataInputStream in = new DataInputStream(server.getInputStream());
-                    String mesRecvd = in.readUTF().trim();
-                    //Log.v(TAG, "Message Received: " +mesRecvd);
-                    publishProgress(mesRecvd);
+                    String mesRecvd = in.readUTF();
+                    Log.v(TAG, "Message Received: " + mesRecvd);
                     server.close();
                     Log.v(TAG, "Socket  closed");
+                    if(mesRecvd == null)
+                    {
+                        // connection establishment
+                        continue;
+                    }
+
+                    messageReceivedListener.onMessageReceived(mesRecvd);
                 } catch (SocketTimeoutException s) {
                     Log.e(TAG, "Receiver timed out!");
                 } catch (IOException e) {
@@ -67,15 +77,5 @@ public class Receiver {
                 }
             }
         }
-
-        protected void onProgressUpdate(String...strings) {
-
-            // inform listener about the message
-            messageReceivedListener.onMessageReceived(strings[0]);
-
-        }
     }
-
-
-
 }

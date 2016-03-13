@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class Coordinator implements MessageReceivedEventListener, TimerExpiredEventListener {
+public class Coordinator implements MessageReceivedEventListener, FailureListener, PingTimerListener {
 
     static final String TAG = Coordinator.class.getSimpleName();
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
@@ -38,7 +38,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     private static Coordinator instance = null;
     private Sender mSender;
     private Receiver mReceiver;
-    private TimerManager mTimerManager;
+    private PingTimer mPingTimer;
     private Integer lastReceivedMessageId = -1;
     private Integer lastSentMessageId = -1;
     private Integer lastProposedSeqNum = -1;
@@ -48,6 +48,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     private ConcurrentHashMap<Integer, List<Message>> broadcastedMessageList = new ConcurrentHashMap<Integer, List<Message>>();
     private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
     private List<Integer> currentDestinationPorts;
+    private HashMap<Integer, PingTimer> pingerMap;
 
     private Coordinator(Activity parentActivity) {
         this.parentActivity = parentActivity;
@@ -62,7 +63,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         displayView.setMovementMethod(new ScrollingMovementMethod());
 
         // initialize a sender that can be used to send messages later
-        mSender = new Sender(parentActivity);
+        mSender = new Sender(parentActivity, this);
         this.currentDestinationPorts = new LinkedList<Integer>();
         for (int port : DESTINATION_PORTS)
             this.currentDestinationPorts.add(port);
@@ -70,8 +71,8 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         //create a receiver to keep listening to incoming messages
         mReceiver = new Receiver(parentActivity, LISTENER_PORT, this);
 
-        // create a timer manager
-        mTimerManager = new TimerManager(parentActivity, this);
+        // create a pingerList
+        pingerMap = new HashMap<Integer, PingTimer>();
     }
 
     synchronized static Coordinator getInstance(Activity parentActivity) {
@@ -84,6 +85,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
     @Override
     synchronized public void onMessageReceived(String message) {
 
+
         Message receivedMessage;
         try {
             receivedMessage = buildMessageFromReceivedJson(message);
@@ -93,17 +95,30 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
             return;
         }
 
+        // start the pinger if there is none for the sender
+        if((receivedMessage.getSenderPid() != MY_PORT) && !pingerMap.containsKey(receivedMessage.getSenderPid()))
+        {
+            PingTimer pinger = new PingTimer(this);
+            pinger.startPinger(TIMEOUT, receivedMessage.getSenderPid());
+            pingerMap.put(receivedMessage.getSenderPid(), pinger);
+
+            Log.v(TAG, "Pinger started for Sender Id " + receivedMessage.getSenderPid() +
+                         " Start Time: " + new Date());
+        }
 
         // print queue
-        StringBuilder sb = new StringBuilder();
-        sb.append("Message Queue on receiving message:\n");
-        for (Message m : messageQueue)
-            sb.append(m.toString() + "\n");
-        Log.v(TAG, sb.toString());
+        if(receivedMessage.getType() != Message.TYPE.PING)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Message Queue on receiving message:\n");
+            for (Message m : messageQueue)
+                sb.append(m.toString() + "\n");
+            Log.v(TAG, sb.toString());
+        }
 
         // handle the message based on the message type
         switch (receivedMessage.getType()) {
-            case 0:
+            case DATA:
                 // Log the message
                 Log.v(TAG, "New Message Received: " + receivedMessage.toString());
 
@@ -125,12 +140,12 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                 messageQueue.add(receivedMessage);
 
                 // send proposal message with proposed sequence number
-                receivedMessage.setType(1);
+                receivedMessage.setType(Message.TYPE.PROPOSAL);
                 sendMessage(receivedMessage, receivedMessage.getSenderPid());
                 Log.v(TAG, "Proposal sent: " + receivedMessage.toString());
 
                 break;
-            case 1:
+            case PROPOSAL:
 
                 // new proposal received, add to proposal list for that message
                 List<Message> messageProposals = broadcastedMessageList.get(receivedMessage.getSenderMessageId());
@@ -149,7 +164,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                 sendAgreementIfAppropriate(messageProposals, receivedMessage.getSenderMessageId());
                 break;
 
-            case 2:
+            case AGREEMENT:
                 // Log the message
                 Log.v(TAG, "Agreement Received: " + receivedMessage.toString());
 
@@ -165,8 +180,12 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
                 break;
 
+            case PING:
+                Log.v(TAG, "Ping Received from process: " + receivedMessage.getSenderPid());
+                break;
+
             default:
-                Log.e(TAG, "Improper Message Type. Ignoring...");
+                Log.e(TAG, "Improper Message Type. Ignoring." + receivedMessage.getSenderPid());
                 return;
         }
 
@@ -241,7 +260,7 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                     while (proposalItr.hasNext()) {
                         Message agreement = proposalItr.next();
                         Integer destinationpid = agreement.getProposerPid();
-                        agreement.setType(2);
+                        agreement.setType(Message.TYPE.AGREEMENT);
                         agreement.setGlobalSeqNum(agreedSeqNum);
                         agreement.setProposerPid(proposerOfAgreedSeq);
                         sendMessage(agreement, destinationpid);
@@ -259,12 +278,10 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         try {
             messageJSON = new JSONObject(message);
 
-            mMessage.setType(messageJSON.getInt("type"));
-            if (mMessage.getType() < 0 || mMessage.getType() > 2)
-                throw new NumberFormatException();
+            mMessage.setTypeId(messageJSON.getInt("type"));
 
             // assign a receiver messageId if it a new message
-            if (mMessage.getType() == 0) {
+            if (mMessage.getType() == Message.TYPE.DATA) {
                 mMessage.setReceiverMessageId(++lastReceivedMessageId);
             } else {
                 mMessage.setReceiverMessageId(messageJSON.getInt("receiverMessageId"));
@@ -297,25 +314,20 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
             jWriter.beginObject();
 
             // message type
-            jWriter.name("type").value(message.getType());
+            jWriter.name("type").value(message.getTypeId());
 
             // if message is new there would be no receiverMessageId and globalSequence number
             jWriter.name("receiverMessageId").value(message.getReceiverMessageId());
-
             jWriter.name("senderMessageId").value(message.getSenderMessageId());
-
             jWriter.name("globalSeqNum").value(message.getGlobalSeqNum());
-
             jWriter.name("senderPid").value(message.getSenderPid());
-
             jWriter.name("proposerPid").value(message.getProposerPid());
 
             // add the messageText
             jWriter.name("messageText").value(message.getMessageText());
-
             jWriter.endObject();
-
             jsonMessage = sWriter.toString();
+
         } catch (IOException e) {
             Log.e(TAG, "IO Exception in JsonWriter.");
             Log.e(TAG, e.toString());
@@ -326,18 +338,13 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
 
     // this would be invoke when the send button it tapped
-    synchronized public void broadcastMessage(String messageText) {
+    synchronized public void broadcastMessage(Message.TYPE messageType, String messageText) {
         // build message object
-        Message mMessage = buildMessageObject(messageText);
+        Message mMessage = buildMessageObject(messageType, messageText);
 
         broadcastedMessageList.put(mMessage.getSenderMessageId(), new LinkedList<Message>());
         mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
         Log.v(TAG, "Message broad-casted: " + mMessage.toString());
-
-        // start a timer after broadcasting a message
-        mTimerManager.startTimer(TIMEOUT, mMessage.getSenderMessageId());
-        Log.v(TAG, "Timer for Message Id " + mMessage.getSenderMessageId() +
-                " Start Time: " + new Date());
 
     }
 
@@ -345,41 +352,62 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
         mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
     }
 
-    synchronized public void sendMessage(Message mMessage, Integer destinationPort) {
-        mSender.sendMessage(buildJSONMessage(mMessage), destinationPort);
+    synchronized public void sendMessage(Message mMessage, Integer destinationID) {
+        mSender.sendMessage(buildJSONMessage(mMessage), destinationID);
     }
 
     // this is would be used for new messages only
-    synchronized Message buildMessageObject(String messageText) {
+    synchronized Message buildMessageObject(Message.TYPE messageType, String messageText) {
         Message mMessage = new Message();
         mMessage.setMessageText(messageText);
-        mMessage.setType(0);
-        mMessage.setSenderMessageId(++lastSentMessageId);
-
+        mMessage.setType(messageType);
         // no globalSeqNum for new messages
         // no receiverMessageId for new messages
         mMessage.setReceiverMessageId(-1);
         mMessage.setGlobalSeqNum(-1);
-
         mMessage.setProposerPid(-1);
-
         mMessage.setSenderPid(MY_PORT);
         // isDeliverable will be handled by the receiver
+
+        if(messageType != Message.TYPE.PING)
+        mMessage.setSenderMessageId(++lastSentMessageId);
+
+
         return mMessage;
     }
 
     @Override
-    synchronized public void onTimerExpired(final int senderMessageId) {
+    synchronized public void onTimeToPing(int processIdToPing) {
 
-        Log.v(TAG, "Timer for Message Id " + senderMessageId +
-                " End Time: " + new Date());
+        Log.v(TAG, "Time to send ping to process Id " + processIdToPing +
+                "\nTime: " + new Date());
+        // ping the process
+        Message pingMessage = buildMessageObject(Message.TYPE.PING, "");
+        sendMessage(pingMessage, processIdToPing);
+        Log.v(TAG, "Ping sent to process Id " + processIdToPing +
+                "\nTime: " + new Date());
+    }
 
-        List<Message> proposals = broadcastedMessageList.get(senderMessageId);
+    @Override
+    public void onFailure(int failedProcessId) {
+
+        Log.e(TAG, "Process Failed: " + failedProcessId +
+                "\nTime: " + new Date());
+        // stop the pinger for the failed process
+        PingTimer pinger = pingerMap.remove(failedProcessId);
+        if(pinger != null){
+            pinger.stopPinger();
+        }
+        else{
+            Log.v(TAG, "Unable to find the pinger of the failed process." + failedProcessId);
+        }
+
+        List<Message> proposals = broadcastedMessageList.get(failedProcessId);
 
         if (proposals != null && proposals.size() != currentDestinationPorts.size()) {
 
             Log.v(TAG, "Proposals missing even after the timer expired." +
-                    "\nSenderMessageId: " + senderMessageId +
+                    "\nSenderMessageId: " + failedProcessId +
                     "\nProposal Count: " + proposals.size() +
                     "\nDestination Count: " + currentDestinationPorts.size());
 
@@ -458,8 +486,6 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                         sendAgreementIfAppropriate(myProposals, firstProposal.getSenderMessageId());
                     }
                 }
-
-
             }
 
             // deliver the messages on top of the queue which are deliverable
