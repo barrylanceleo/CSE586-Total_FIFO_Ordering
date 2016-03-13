@@ -276,11 +276,6 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
             mMessage.setProposerPid(messageJSON.getInt("proposerPid"));
             mMessage.setMessageText(messageJSON.getString("messageText"));
 
-//            // check if message is deliverable
-//            if(mMessage.getType() == 2)
-//                mMessage.setIsDeliverable(true);
-//            else
-//                mMessage.setIsDeliverable(false);
         } catch (JSONException e) {
             Log.e(TAG, "Improper Message Format.");
             throw e;
@@ -440,8 +435,6 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
                     }
                 }
 
-
-
                 // clear the proposal of this proposer from my list
                 Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
                         broadcastedMessageList.entrySet().iterator();
@@ -468,9 +461,6 @@ public class Coordinator implements MessageReceivedEventListener, TimerExpiredEv
 
 
             }
-//
-//            //Send agreement if necessary
-//            sendAgreementIfAppropriate(proposals, senderMessageId);
 
             // deliver the messages on top of the queue which are deliverable
             deliverMessagesifAppropriate();
