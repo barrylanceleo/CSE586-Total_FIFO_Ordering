@@ -6,5 +6,5 @@ package edu.buffalo.cse.cse486586.groupmessenger2;
 public interface PingTimerListener {
 
     void onTimeToPing(int processIdToPing);
-
+    void onTimeToCheckAck(int process);
 }

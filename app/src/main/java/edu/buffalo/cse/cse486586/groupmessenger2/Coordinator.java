@@ -18,7 +18,6 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -30,7 +29,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     static final String TAG = Coordinator.class.getSimpleName();
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
     static final int LISTENER_PORT = 10000;
-    static final long TIMEOUT = 5000;
+    static final long TIMEOUT = 2500;
     int MY_PORT;
     private Activity parentActivity;
     private TextView displayView;
@@ -48,7 +47,21 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     private ConcurrentHashMap<Integer, List<Message>> broadcastedMessageList = new ConcurrentHashMap<Integer, List<Message>>();
     private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
     private List<Integer> currentDestinationPorts;
-    private HashMap<Integer, PingTimer> pingerMap;
+    private HashMap<Integer, PingTracker> pingerMap;
+
+
+    private class PingTracker
+    {
+        PingTimer pinger;
+        boolean receivedACK;
+
+        PingTracker(PingTimer pinger, boolean receivedACK)
+        {
+            this.pinger = pinger;
+            this.receivedACK = receivedACK;
+        }
+
+    }
 
     private Coordinator(Activity parentActivity) {
         this.parentActivity = parentActivity;
@@ -69,10 +82,10 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
             this.currentDestinationPorts.add(port);
 
         //create a receiver to keep listening to incoming messages
-        mReceiver = new Receiver(parentActivity, LISTENER_PORT, this);
+        mReceiver = new Receiver(LISTENER_PORT, this);
 
         // create a pingerList
-        pingerMap = new HashMap<Integer, PingTimer>();
+        pingerMap = new HashMap<Integer, PingTracker>();
     }
 
     synchronized static Coordinator getInstance(Activity parentActivity) {
@@ -100,14 +113,15 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         {
             PingTimer pinger = new PingTimer(this);
             pinger.startPinger(TIMEOUT, receivedMessage.getSenderPid());
-            pingerMap.put(receivedMessage.getSenderPid(), pinger);
+            PingTracker pingTracker = new PingTracker(pinger, true);
+            pingerMap.put(receivedMessage.getSenderPid(), pingTracker);
 
             Log.v(TAG, "Pinger started for Sender Id " + receivedMessage.getSenderPid() +
                          " Start Time: " + new Date());
         }
 
         // print queue
-        if(receivedMessage.getType() != Message.TYPE.PING)
+        if(!(receivedMessage.getType() == Message.TYPE.PING || receivedMessage.getType() == Message.TYPE.ACK))
         {
             StringBuilder sb = new StringBuilder();
             sb.append("Message Queue on receiving message:\n");
@@ -181,7 +195,25 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 break;
 
             case PING:
-                Log.v(TAG, "Ping Received from process: " + receivedMessage.getSenderPid());
+                Log.v(TAG, "PING Received from process: " + receivedMessage.getSenderPid()
+                        + " in " + MY_PORT);
+                // send ack
+                Message pingMessage = buildMessageObject(Message.TYPE.ACK, "");
+                sendMessage(pingMessage, receivedMessage.getSenderPid());
+                Log.v(TAG, "ACK sent to process Id " + receivedMessage.getSenderPid() + " from " + MY_PORT);
+                break;
+
+            case ACK:
+                Log.v(TAG, "ACK Received from process: " + receivedMessage.getSenderPid()
+                        + " in " + MY_PORT);
+                //check if previous ACK was received
+                PingTracker pingTracker = pingerMap.get(receivedMessage.getSenderPid());
+                if(pingTracker != null){
+                    pingTracker.receivedACK = true;
+                }
+                else{
+                    Log.e(TAG, "Unable to find the pinger on receiving ACK." + receivedMessage.getSenderPid());
+                }
                 break;
 
             default:
@@ -267,7 +299,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                         Log.v(TAG, "Agreement sent: " + agreement.toString());
                     }
 
-                    //remove the message from the hashmap
+                    //remove the message from the broadcastedMessageList
                     broadcastedMessageList.remove(senderMessageId);
         }
     }
@@ -348,10 +380,6 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
 
     }
 
-    synchronized public void broadcastMessage(Message mMessage) {
-        mSender.broadcastMessage(buildJSONMessage(mMessage), currentDestinationPorts);
-    }
-
     synchronized public void sendMessage(Message mMessage, Integer destinationID) {
         mSender.sendMessage(buildJSONMessage(mMessage), destinationID);
     }
@@ -369,9 +397,10 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         mMessage.setSenderPid(MY_PORT);
         // isDeliverable will be handled by the receiver
 
-        if(messageType != Message.TYPE.PING)
-        mMessage.setSenderMessageId(++lastSentMessageId);
-
+        if(!(messageType == Message.TYPE.PING || messageType == Message.TYPE.ACK))
+        {
+            mMessage.setSenderMessageId(++lastSentMessageId);
+        }
 
         return mMessage;
     }
@@ -379,119 +408,113 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     @Override
     synchronized public void onTimeToPing(int processIdToPing) {
 
-        Log.v(TAG, "Time to send ping to process Id " + processIdToPing +
-                "\nTime: " + new Date());
+//        Log.v(TAG, "Time to send ping to process Id " + processIdToPing +
+//                "\nTime: " + new Date());
+
         // ping the process
         Message pingMessage = buildMessageObject(Message.TYPE.PING, "");
         sendMessage(pingMessage, processIdToPing);
-        Log.v(TAG, "Ping sent to process Id " + processIdToPing +
-                "\nTime: " + new Date());
+        Log.v(TAG, "Ping sent to process Id " + processIdToPing + " from " + MY_PORT);
+    }
+
+
+    @Override
+    synchronized public void onTimeToCheckAck(int process)
+    {
+        //check if previous ACK was received
+        PingTracker pingTracker = pingerMap.get(process);
+        if(pingTracker != null){
+            if(pingTracker.receivedACK == false)
+            {
+                // this process has likely failed
+                onFailure(process);
+            }
+            pingTracker.receivedACK = false;
+        }
+        else{
+            Log.e(TAG, "Unable to find the pinger of process." + process);
+        }
+        Log.v(TAG, "Checked ack for " + process + " in " + MY_PORT);
     }
 
     @Override
-    public void onFailure(int failedProcessId) {
+    synchronized public void onFailure(int failedProcessId) {
 
-        Log.e(TAG, "Process Failed: " + failedProcessId +
+        Log.e(TAG + "ONFAILURE", "Failed process: " + failedProcessId +
                 "\nTime: " + new Date());
+
         // stop the pinger for the failed process
-        PingTimer pinger = pingerMap.remove(failedProcessId);
-        if(pinger != null){
-            pinger.stopPinger();
+        PingTracker pingTracker = pingerMap.remove(failedProcessId);
+        if(pingTracker != null){
+            pingTracker.pinger.stopPinger();
+            Log.v(TAG + "ONFAILURE", "Stopped pinger for " + failedProcessId);
+
         }
         else{
-            Log.v(TAG, "Unable to find the pinger of the failed process." + failedProcessId);
+            Log.e(TAG  + "ONFAILURE", "Unable to find the pinger of the failed process." + failedProcessId);
         }
 
-        List<Message> proposals = broadcastedMessageList.get(failedProcessId);
-
-        if (proposals != null && proposals.size() != currentDestinationPorts.size()) {
-
-            Log.v(TAG, "Proposals missing even after the timer expired." +
-                    "\nSenderMessageId: " + failedProcessId +
-                    "\nProposal Count: " + proposals.size() +
-                    "\nDestination Count: " + currentDestinationPorts.size());
-
-            //find the missing proposer
-
-            // create a set of processes that have proposed
-            HashSet<Integer> currentProposers = new HashSet<Integer>();
-            for (Message proposal : proposals) {
-                currentProposers.add(proposal.getProposerPid());
-            }
-
-            // find the missing proposers and put them in a list
-            List<Integer> missingProposers = new LinkedList<Integer>();
-            for (Integer proposers : currentDestinationPorts) {
-                if (!currentProposers.contains(proposers)) {
-                    missingProposers.add(proposers);
-
-                    // display in the UI
-                    final int missingProposer = proposers;
-                    parentActivity.runOnUiThread(new Runnable() {
-                        public void run() {
-                            //display the message
-                            displayView.append("Looks like pid: "
-                                    + missingProposer + "has been terminated\n");
-                        }
-                    });
-
-                }
-            }
-
-            // for each missing proposer clear their state
-            for (Integer missingProposer : missingProposers) {
-                Log.v(TAG, "Missing Proposer: " + missingProposer);
-
-                // declare the missing proposer as failed and
-                // remove the proposers from the list
-                if (currentDestinationPorts.remove(missingProposer)) {
-                    Log.v(TAG, "Removed missing proposer from the destinations: " + missingProposer
-                            + "\nCurrent proposers size: " + currentDestinationPorts.size());
-                } else {
-                    Log.v(TAG, "Unable to remove Missing Proposer: " + missingProposer);
-                }
-
-                // clear the deleted process' messages from the priority queue
-                Iterator<Message> queueItr = messageQueue.iterator();
-                while (queueItr.hasNext()) {
-                    Message messageInQueue = queueItr.next();
-                    if (messageInQueue.getSenderPid() == missingProposer) {
-                        if (messageQueue.remove(messageInQueue)) {
-                            Log.v(TAG, "Cleared message from queue due to missing proposer: "
-                                    + missingProposer + "\n" + messageInQueue.toString());
-                        }
-                    }
-                }
-
-                // clear the proposal of this proposer from my list
-                Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
-                        broadcastedMessageList.entrySet().iterator();
-                while (broadcastListItr.hasNext()) {
-                    HashMap.Entry<Integer, List<Message>> pair = broadcastListItr.next();
-                    List<Message> myProposals = pair.getValue();
-
-                    for(Iterator<Message> iter = myProposals.iterator(); iter.hasNext();)
-                    {
-                        Message proposal = iter.next();
-                        if (proposal.getProposerPid() == missingProposer) {
-                            iter.remove();
-                            Log.v(TAG, "Removed proposal: \n" + proposal.toString()
-                                    + "\nfrom missing proposer " + missingProposer);
-                        }
-                    }
-
-                    // Send agreement if necessary
-                    if(!myProposals.isEmpty()){
-                        Message firstProposal = myProposals.get(0);
-                        sendAgreementIfAppropriate(myProposals, firstProposal.getSenderMessageId());
-                    }
-                }
-            }
-
-            // deliver the messages on top of the queue which are deliverable
-            deliverMessagesifAppropriate();
-
+        // remove the failed process from the destination list
+        Log.v(TAG + "ONFAILURE", "Before removing from destination ports"
+                + "\ncurrentDestinationPorts: " +currentDestinationPorts.toString());
+        if (currentDestinationPorts.remove(new Integer(failedProcessId))) {
+            Log.v(TAG  + "ONFAILURE", "Removed failed process from the destinations: " + failedProcessId
+                    + "\nCurrent destination list size: " + currentDestinationPorts.size());
+        } else {
+            Log.e(TAG  + "ONFAILURE", "Unable to remove failed process: " + failedProcessId);
         }
+
+        // print queue
+        StringBuilder sb = new StringBuilder();
+        sb.append("Message Queue before removing on receiving message:\n");
+        for (Message m : messageQueue)
+            sb.append(m.toString() + "\n");
+        Log.v(TAG + "ONFAILURE", sb.toString());
+        // clear the deleted process' messages from the priority queue
+        Iterator<Message> queueItr = messageQueue.iterator();
+        while (queueItr.hasNext()) {
+            Message messageInQueue = queueItr.next();
+            if (messageInQueue.getSenderPid() == failedProcessId) {
+                if (messageQueue.remove(messageInQueue)) {
+                    Log.v(TAG  + "ONFAILURE", "Cleared message from queue due to failed process: "
+                            + failedProcessId + "\n" + messageInQueue.toString());
+                }
+            }
+        }
+
+        Log.v(TAG + "ONFAILURE", "Broadcasted Messages and their proposals");
+        // clear the proposals of this failed process from my list
+        Iterator<HashMap.Entry<Integer, List<Message>>> broadcastListItr =
+                broadcastedMessageList.entrySet().iterator();
+        int i = 1;
+        while (broadcastListItr.hasNext()) {
+            HashMap.Entry<Integer, List<Message>> pair = broadcastListItr.next();
+            List<Message> myProposals = pair.getValue();
+
+            Log.v(TAG + "ONFAILURE", "Broadcasted Message " + i++);
+            for(Iterator<Message> iter = myProposals.iterator(); iter.hasNext();)
+            {
+                Message proposal = iter.next();
+                Log.v(TAG + "ONFAILURE", proposal.toString());
+                if (proposal.getProposerPid() == failedProcessId) {
+                    iter.remove();
+                    Log.v(TAG  + "ONFAILURE", "Removed proposal: \n" + proposal.toString()
+                            + "\nfrom failed process " + failedProcessId);
+                }
+            }
+
+            // Send agreement if necessary
+            if(!myProposals.isEmpty()){
+                Message firstProposal = myProposals.get(0);
+                sendAgreementIfAppropriate(myProposals, firstProposal.getSenderMessageId());
+            }
+        }
+
+        // deliver the messages on top of the queue which are deliverable
+        deliverMessagesifAppropriate();
+
+        Log.v(TAG + "ONFAILURE", "Enf of ONFAILURE");
+
     }
 }
 

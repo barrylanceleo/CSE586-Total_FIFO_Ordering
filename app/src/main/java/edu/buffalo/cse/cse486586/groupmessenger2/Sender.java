@@ -64,12 +64,12 @@ public class Sender {
 //                BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 //                bw.write(msgToSend);
 //                bw.newLine();
-                Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
+                //Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
                 socket.close();
             } catch(Exception e)
             {
                 Log.e(TAG, "SenderTask Exception");
-                failureListener.onFailure(destinationPort);
+                //failureListener.onFailure(destinationPort);
             }
 //            catch (UnknownHostException e) {
 //                Log.e(TAG, "SenderTask UnknownHostException");

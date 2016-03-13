@@ -5,9 +5,10 @@ public class Message implements Comparable<Message>{
     public enum TYPE
     {
         PING(0),
-        DATA(1),
-        PROPOSAL(2),
-        AGREEMENT(3);
+        ACK(1),
+        DATA(2),
+        PROPOSAL(3),
+        AGREEMENT(4);
 
         private final int typeId;
 

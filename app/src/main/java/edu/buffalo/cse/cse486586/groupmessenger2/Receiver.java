@@ -1,6 +1,5 @@
 package edu.buffalo.cse.cse486586.groupmessenger2;
 
-import android.app.Activity;
 import android.os.AsyncTask;
 import android.util.Log;
 
@@ -17,13 +16,11 @@ public class Receiver {
 
     static final String TAG = Receiver.class.getSimpleName();
     ServerSocket listenerSocket;
-    Activity parentActivity;
     int listenerPort;
 
-    Receiver(Activity parentActivity, int listenerPort, MessageReceivedEventListener messageReceivedListener)
+    Receiver(int listenerPort, MessageReceivedEventListener messageReceivedListener)
     {
         this.listenerPort = listenerPort;
-        this.parentActivity = parentActivity;
 
         // make the coordinator listen to message received events
         setOnMessageReceivedListener(messageReceivedListener);
@@ -54,15 +51,14 @@ public class Receiver {
             while(true) {
                 try {
                     Socket server = serverSocket.accept();
-                    server.setSoTimeout(parentActivity.getResources().getInteger(R.integer.timeout));
-                    Log.v(TAG, "Connection Accepted!");
+                    //Log.v(TAG, "Connection Accepted!");
 //                    br = new BufferedReader(new InputStreamReader(server.getInputStream()));
 //                    String mesRecvd = br.readLine();
                     DataInputStream in = new DataInputStream(server.getInputStream());
                     String mesRecvd = in.readUTF();
-                    Log.v(TAG, "Message Received: " + mesRecvd);
+                   // Log.v(TAG, "Message Received: " + mesRecvd);
                     server.close();
-                    Log.v(TAG, "Socket  closed");
+                   // Log.v(TAG, "Socket  closed");
                     if(mesRecvd == null)
                     {
                         // connection establishment

@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 public class PingTimer {
 
 
+    private static final int MULTIPLIER = 2;
     static final String TAG = PingTimer.class.getSimpleName();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     PingTimerListener pingTimerListener;
@@ -27,7 +28,13 @@ public class PingTimer {
                 pingTimerListener.onTimeToPing(processId);
             }
         };
+        final Runnable ackChecker = new Runnable() {
+            public void run() {
+                pingTimerListener.onTimeToCheckAck(processId);
+            }
+        };
         scheduler.scheduleAtFixedRate(pinger, time, time, TimeUnit.MILLISECONDS);
+        scheduler.scheduleAtFixedRate(ackChecker, time*MULTIPLIER, time*MULTIPLIER, TimeUnit.MILLISECONDS);
     }
 
     void stopPinger() {
