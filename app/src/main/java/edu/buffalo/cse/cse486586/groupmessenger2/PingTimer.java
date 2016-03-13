@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit;
 public class PingTimer {
 
 
-    private static final int MULTIPLIER = 2;
+    private static final int MULTIPLIER = 3;
     static final String TAG = PingTimer.class.getSimpleName();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     PingTimerListener pingTimerListener;

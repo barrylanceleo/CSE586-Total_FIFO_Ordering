@@ -50,32 +50,20 @@ public class Sender {
             Integer destinationPort = (Integer)params[1];
             try
             {
-                //Log.v(TAG, "Sending message to " + destinationPort + " : " + msgToSend);
                 Socket socket = new Socket();
-                socket.setSoTimeout(SOCKET_TIMEOUT);
                 socket.connect(new InetSocketAddress(InetAddress.getByAddress(new byte[]{10, 0, 2, 2}),
-                        destinationPort), SOCKET_TIMEOUT);
+                        destinationPort));
                 if(!socket.isConnected())
                 {
                     Log.v(TAG, "Couldn't connect. Failure");
                 }
                 DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 out.writeUTF(msgToSend);
-//                BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
-//                bw.write(msgToSend);
-//                bw.newLine();
-                //Log.v(TAG, "Message Sent to " + destinationPort + " : " + msgToSend);
                 socket.close();
             } catch(Exception e)
             {
                 Log.e(TAG, "SenderTask Exception");
-                //failureListener.onFailure(destinationPort);
             }
-//            catch (UnknownHostException e) {
-//                Log.e(TAG, "SenderTask UnknownHostException");
-//            } catch (IOException e) {
-//                Log.e(TAG, "SenderTask socket IOException");
-//            }
             return null;
         }
     }

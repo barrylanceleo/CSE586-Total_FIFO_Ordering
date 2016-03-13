@@ -30,6 +30,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     static final int[] DESTINATION_PORTS = {11108, 11112, 11116, 11120, 11124};
     static final int LISTENER_PORT = 10000;
     static final long TIMEOUT = 2500;
+    static final  int PINGERSTOPPER_COUNT = 10;
     int MY_PORT;
     private Activity parentActivity;
     private TextView displayView;
@@ -37,15 +38,14 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     private static Coordinator instance = null;
     private Sender mSender;
     private Receiver mReceiver;
-    private PingTimer mPingTimer;
     private Integer lastReceivedMessageId = -1;
     private Integer lastSentMessageId = -1;
     private Integer lastProposedSeqNum = -1;
     private Integer lastAgreedSeqNum = -1;
     private Integer finalContinuousSeqNum = 0;
 
-    private ConcurrentHashMap<Integer, List<Message>> broadcastedMessageList = new ConcurrentHashMap<Integer, List<Message>>();
-    private PriorityQueue<Message> messageQueue = new PriorityQueue<Message>();
+    private ConcurrentHashMap<Integer, List<Message>> broadcastedMessageList;
+    private PriorityQueue<Message> messageQueue;
     private List<Integer> currentDestinationPorts;
     private HashMap<Integer, PingTracker> pingerMap;
 
@@ -54,11 +54,13 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
     {
         PingTimer pinger;
         boolean receivedACK;
+        int numAcksWithoutDataTransfer;
 
-        PingTracker(PingTimer pinger, boolean receivedACK)
+        PingTracker(PingTimer pinger, boolean receivedACK, int numAcksWithoutDataTransfer)
         {
             this.pinger = pinger;
             this.receivedACK = receivedACK;
+            this.numAcksWithoutDataTransfer = numAcksWithoutDataTransfer;
         }
 
     }
@@ -84,8 +86,29 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         //create a receiver to keep listening to incoming messages
         mReceiver = new Receiver(LISTENER_PORT, this);
 
+        // create the message queue
+        messageQueue = new PriorityQueue<Message>();
+
+        // create a list to keep track of the broadcasted messages and their proposal
+        broadcastedMessageList = new ConcurrentHashMap<Integer, List<Message>>();
+
         // create a pingerList
         pingerMap = new HashMap<Integer, PingTracker>();
+
+        // create pingersfor the destinations
+        for(Integer processId: currentDestinationPorts)
+        {
+            if(processId != MY_PORT)
+            {
+                PingTimer pinger = new PingTimer(this);
+                pinger.startPinger(TIMEOUT, processId);
+                PingTracker pingTracker = new PingTracker(pinger, true, 0);
+                pingerMap.put(processId, pingTracker);
+
+                Log.v(TAG, "Pinger started for Sender Id " + processId +
+                        " Start Time: " + new Date());
+            }
+        }
     }
 
     synchronized static Coordinator getInstance(Activity parentActivity) {
@@ -108,18 +131,6 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
             return;
         }
 
-        // start the pinger if there is none for the sender
-        if((receivedMessage.getSenderPid() != MY_PORT) && !pingerMap.containsKey(receivedMessage.getSenderPid()))
-        {
-            PingTimer pinger = new PingTimer(this);
-            pinger.startPinger(TIMEOUT, receivedMessage.getSenderPid());
-            PingTracker pingTracker = new PingTracker(pinger, true);
-            pingerMap.put(receivedMessage.getSenderPid(), pingTracker);
-
-            Log.v(TAG, "Pinger started for Sender Id " + receivedMessage.getSenderPid() +
-                         " Start Time: " + new Date());
-        }
-
         // print queue
         if(!(receivedMessage.getType() == Message.TYPE.PING || receivedMessage.getType() == Message.TYPE.ACK))
         {
@@ -128,6 +139,17 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
             for (Message m : messageQueue)
                 sb.append(m.toString() + "\n");
             Log.v(TAG, sb.toString());
+
+            if(receivedMessage.getSenderPid() != MY_PORT)
+            {
+                PingTracker pingTracker = pingerMap.get(receivedMessage.getSenderPid());
+                if(pingTracker != null){
+                    pingTracker.numAcksWithoutDataTransfer = 0;
+                }
+                else{
+                    Log.e(TAG, "Unable to find the pinger of process." + receivedMessage.getSenderPid());
+                }
+            }
         }
 
         // handle the message based on the message type
@@ -253,6 +275,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 String returnKey = testCursor.getString(testCursor.getColumnIndex("key"));
                 String returnValue = testCursor.getString(testCursor.getColumnIndex("value"));
                 Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " + returnValue);
+                testCursor.close();
             }
             ++finalContinuousSeqNum;
         }
@@ -430,8 +453,11 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 onFailure(process);
             }
             pingTracker.receivedACK = false;
-        }
-        else{
+            if(pingTracker.numAcksWithoutDataTransfer++ == PINGERSTOPPER_COUNT)
+            {
+                pingTracker.pinger.stopPinger();
+            }
+        } else {
             Log.e(TAG, "Unable to find the pinger of process." + process);
         }
         Log.v(TAG, "Checked ack for " + process + " in " + MY_PORT);

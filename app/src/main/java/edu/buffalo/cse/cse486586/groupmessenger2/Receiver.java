@@ -51,20 +51,14 @@ public class Receiver {
             while(true) {
                 try {
                     Socket server = serverSocket.accept();
-                    //Log.v(TAG, "Connection Accepted!");
-//                    br = new BufferedReader(new InputStreamReader(server.getInputStream()));
-//                    String mesRecvd = br.readLine();
                     DataInputStream in = new DataInputStream(server.getInputStream());
                     String mesRecvd = in.readUTF();
-                   // Log.v(TAG, "Message Received: " + mesRecvd);
                     server.close();
-                   // Log.v(TAG, "Socket  closed");
                     if(mesRecvd == null)
                     {
                         // connection establishment
                         continue;
                     }
-
                     messageReceivedListener.onMessageReceived(mesRecvd);
                 } catch (SocketTimeoutException s) {
                     Log.e(TAG, "Receiver timed out!");
