@@ -156,7 +156,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         switch (receivedMessage.getType()) {
             case DATA:
                 // Log the message
-                Log.v(TAG, "New Message Received: " + receivedMessage.toString());
+                //Log.v(TAG, "New Message Received: " + receivedMessage.toString());
 
                 // propose a global sequence number
                 int newProposedSeqNum = Math.max(lastProposedSeqNum, lastAgreedSeqNum) + 1;
@@ -178,7 +178,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 // send proposal message with proposed sequence number
                 receivedMessage.setType(Message.TYPE.PROPOSAL);
                 sendMessage(receivedMessage, receivedMessage.getSenderPid());
-                Log.v(TAG, "Proposal sent: " + receivedMessage.toString());
+                //Log.v(TAG, "Proposal sent: " + receivedMessage.toString());
 
                 break;
             case PROPOSAL:
@@ -192,8 +192,8 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 broadcastedMessageList.put(receivedMessage.getSenderMessageId(), messageProposals);
 
                 // Log the message
-                Log.v(TAG, "Proposal Received: " + receivedMessage.toString() +
-                        "\nNumber of proposals for this message: " + messageProposals.size());
+//                Log.v(TAG, "Proposal Received: " + receivedMessage.toString() +
+//                        "\nNumber of proposals for this message: " + messageProposals.size());
 
                 // check if we have received proposal from all nodes
                 // if yes, send the agreed sequence number
@@ -202,7 +202,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
 
             case AGREEMENT:
                 // Log the message
-                Log.v(TAG, "Agreement Received: " + receivedMessage.toString());
+                //Log.v(TAG, "Agreement Received: " + receivedMessage.toString());
 
                 // new agreement received
                 receivedMessage.setIsDeliverable(true);
@@ -217,16 +217,16 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                 break;
 
             case PING:
-                Log.v(TAG, "PING Received from process: " + receivedMessage.getSenderPid()
+                Log.v(TAG + "Pinger", "PING Received from process: " + receivedMessage.getSenderPid()
                         + " in " + MY_PORT);
                 // send ack
                 Message pingMessage = buildMessageObject(Message.TYPE.ACK, "");
                 sendMessage(pingMessage, receivedMessage.getSenderPid());
-                Log.v(TAG, "ACK sent to process Id " + receivedMessage.getSenderPid() + " from " + MY_PORT);
+                Log.v(TAG + "Pinger", "ACK sent to process Id " + receivedMessage.getSenderPid() + " from " + MY_PORT);
                 break;
 
             case ACK:
-                Log.v(TAG, "ACK Received from process: " + receivedMessage.getSenderPid()
+                Log.v(TAG + "Pinger", "ACK Received from process: " + receivedMessage.getSenderPid()
                         + " in " + MY_PORT);
                 //check if previous ACK was received
                 PingTracker pingTracker = pingerMap.get(receivedMessage.getSenderPid());
@@ -234,7 +234,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                     pingTracker.receivedACK = true;
                 }
                 else{
-                    Log.e(TAG, "Unable to find the pinger on receiving ACK." + receivedMessage.getSenderPid());
+                    Log.e(TAG + "Pinger", "Unable to find the pinger on receiving ACK." + receivedMessage.getSenderPid());
                 }
                 break;
 
@@ -268,24 +268,24 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
             cv.put("key", Integer.toString(finalContinuousSeqNum));
             cv.put("value", topMessage.getMessageText());
             mContentResolver.insert(GroupMessengerProvider.CPUri, cv);
-            Log.v(TAG, "Delivered and stored message in Content Provider: " + topMessage.toString());
+            //Log.v(TAG, "Delivered and stored message in Content Provider: " + topMessage.toString());
             Cursor testCursor = mContentResolver.query(GroupMessengerProvider.CPUri, null, String.valueOf(finalContinuousSeqNum), null, null);
             if (testCursor != null) {
                 testCursor.moveToFirst();
                 String returnKey = testCursor.getString(testCursor.getColumnIndex("key"));
                 String returnValue = testCursor.getString(testCursor.getColumnIndex("value"));
-                Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " + returnValue);
+                //Log.v(TAG, "From Database:\nKEY: " + returnKey + "\nVALUE: " + returnValue);
                 testCursor.close();
             }
             ++finalContinuousSeqNum;
         }
 
-        // print queue
-        StringBuilder sb = new StringBuilder();
-        sb.append("Message Queue after delivering messages:\n");
-        for (Message m : messageQueue)
-            sb.append(m.toString() + "\n");
-        Log.v(TAG, sb.toString());
+//        // print queue
+//        StringBuilder sb = new StringBuilder();
+//        sb.append("Message Queue after delivering messages:\n");
+//        for (Message m : messageQueue)
+//            sb.append(m.toString() + "\n");
+//        Log.v(TAG, sb.toString());
 
     }
 
@@ -319,7 +319,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
                         agreement.setGlobalSeqNum(agreedSeqNum);
                         agreement.setProposerPid(proposerOfAgreedSeq);
                         sendMessage(agreement, destinationpid);
-                        Log.v(TAG, "Agreement sent: " + agreement.toString());
+                        //Log.v(TAG, "Agreement sent: " + agreement.toString());
                     }
 
                     //remove the message from the broadcastedMessageList
@@ -437,7 +437,7 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         // ping the process
         Message pingMessage = buildMessageObject(Message.TYPE.PING, "");
         sendMessage(pingMessage, processIdToPing);
-        Log.v(TAG, "Ping sent to process Id " + processIdToPing + " from " + MY_PORT);
+        Log.v(TAG + "Pinger", "Ping sent to process Id " + processIdToPing + " from " + MY_PORT);
     }
 
 
@@ -455,25 +455,35 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
             pingTracker.receivedACK = false;
             if(pingTracker.numAcksWithoutDataTransfer++ == PINGERSTOPPER_COUNT)
             {
+                Log.e(TAG + "Pinger", "No Active data connection with " + process + " in " + MY_PORT
+                        + ". Stopping Pinger.");
                 pingTracker.pinger.stopPinger();
             }
         } else {
-            Log.e(TAG, "Unable to find the pinger of process." + process);
+            Log.e(TAG + "Pinger", "Unable to find the pinger of process." + process);
         }
-        Log.v(TAG, "Checked ack for " + process + " in " + MY_PORT);
+        Log.v(TAG + "Pinger", "Checked ack for " + process + " in " + MY_PORT);
     }
 
     @Override
-    synchronized public void onFailure(int failedProcessId) {
+    synchronized public void onFailure(final int failedProcessId) {
 
         Log.e(TAG + "ONFAILURE", "Failed process: " + failedProcessId +
                 "\nTime: " + new Date());
+
+
+        parentActivity.runOnUiThread(new Runnable() {
+            public void run() {
+                //display the message
+                displayView.append("Process " + failedProcessId + " has failed.\n");
+            }
+        });
 
         // stop the pinger for the failed process
         PingTracker pingTracker = pingerMap.remove(failedProcessId);
         if(pingTracker != null){
             pingTracker.pinger.stopPinger();
-            Log.v(TAG + "ONFAILURE", "Stopped pinger for " + failedProcessId);
+            Log.e(TAG + "ONFAILURE", "Stopping pinger for " + failedProcessId);
 
         }
         else{
@@ -501,10 +511,9 @@ public class Coordinator implements MessageReceivedEventListener, FailureListene
         while (queueItr.hasNext()) {
             Message messageInQueue = queueItr.next();
             if (messageInQueue.getSenderPid() == failedProcessId) {
-                if (messageQueue.remove(messageInQueue)) {
-                    Log.v(TAG  + "ONFAILURE", "Cleared message from queue due to failed process: "
-                            + failedProcessId + "\n" + messageInQueue.toString());
-                }
+                queueItr.remove();
+                Log.v(TAG  + "ONFAILURE", "Cleared message from queue due to failed process: "
+                        + failedProcessId + "\n" + messageInQueue.toString());
             }
         }
 
